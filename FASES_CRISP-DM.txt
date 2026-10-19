@@ -1,0 +1,228 @@
+==============================================================================
+ PROYECTO: Reconocimiento de caracteres manuscritos con CNN (EMNIST Balanced)
+ METODOLOGIA: CRISP-DM (6 fases)        GUIA DE REPASO Y ESTUDIO
+==============================================================================
+
+ARCHIVOS DEL PROYECTO
+  train.py            -> codigo de las fases 2, 3, 4, 5 y exporta lo de la fase 6
+  app.py              -> app Streamlit (fase 6) que ademas muestra las 6 fases
+  requirements.txt    -> dependencias para el despliegue
+  model/              -> emnist_cnn.keras, labels.json, samples.npz
+  reports/            -> graficas (01..08.png), metrics.json, data_understanding.json
+  archive/            -> dataset de Kaggle (CSV). NO se sube a GitHub (.gitignore)
+
+IDEA CLAVE DE CRISP-DM: es un CICLO, no una linea recta. Despues de evaluar,
+si no se cumplen los objetivos se regresa a datos / preparacion / modelado.
+
+
+==============================================================================
+FASE 1. COMPRENSION DEL NEGOCIO  (Business Understanding)
+==============================================================================
+Pregunta que responde: ¿QUE problema real resolvemos y COMO sabremos que
+funciono?
+
+Que se hizo:
+  - Problema: digitalizar texto escrito a mano (formularios, examenes, cheques)
+    es lento y propenso a errores si se hace manualmente.
+  - Objetivo de negocio: reducir la captura manual con un clasificador
+    automatico y confiable.
+  - Objetivo de mineria de datos: dado una imagen 28x28 en grises, predecir una
+    de 47 clases (10 digitos + 26 mayusculas + 11 minusculas distintivas).
+    Es un problema de CLASIFICACION MULTICLASE sobre IMAGENES -> se elige CNN.
+  - Criterios de exito definidos ANTES de entrenar:
+        * Exactitud en test >= 88 %  (la literatura reporta ~90 % en Balanced)
+        * CNN mejor que un modelo simple (baseline)
+        * Top-3 accuracy >= 97 %
+        * App web publica para probar el modelo
+  - Riesgos: letras casi identicas (O/0, I/1, F/f...), techo < 100 %;
+    solo se reconocen caracteres aislados, no palabras.
+
+Para estudiar: ¿por que definir metricas de exito antes de modelar?
+  Respuesta: para poder decir objetivamente en la fase 5 si el proyecto sirvio.
+
+
+==============================================================================
+FASE 2. COMPRENSION DE LOS DATOS  (Data Understanding)
+==============================================================================
+Pregunta que responde: ¿QUE datos tenemos y de que calidad son?
+Codigo: funcion phase2_understanding() de train.py.
+
+Dataset: EMNIST (Extended MNIST), Kaggle crawford/emnist, derivado del NIST
+Special Database 19. Hay 6 variantes (byclass, bymerge, balanced, letters,
+digits, mnist). Se uso BALANCED porque tiene 47 clases con igual cantidad de
+muestras. Cada CSV: columna 0 = etiqueta, columnas 1..784 = pixeles (0-255).
+El archivo *-mapping.txt convierte el indice de clase en codigo ASCII
+(ej. 36 -> 'a'). Las minusculas que se parecen a su mayuscula (c, i, j, k, l,
+m, o, p, s, u, v, w, x, y, z) estan fusionadas con la mayuscula.
+
+Hallazgos (data_understanding.json y reports/01..04):
+  - 112 800 imagenes de train y 18 800 de test, 47 clases.
+  - Exactamente 2 400 imagenes por clase en train -> BALANCEADO: no hace falta
+    re-muestreo y la exactitud es una metrica valida.
+  - 0 valores nulos; pixeles en [0,255]; media 44.65, desviacion 84.98.
+  - 66.7 % de los pixeles son 0 (fondo negro): la informacion esta en el trazo.
+  - 0 duplicados exactos en una muestra de 20 000.
+  - HALLAZGO CLAVE: las imagenes vienen TRANSPUESTAS (rotadas 90 + espejo).
+    Se vio graficando las imagenes crudas (02_orientacion.png). Si no se
+    corrige, las letras salen "de lado" y el modelo se entrena con basura
+    para la app real.
+
+Para estudiar: ¿por que graficar antes de modelar?
+  Porque errores como la transposicion no los detecta ninguna metrica.
+
+
+==============================================================================
+FASE 3. PREPARACION DE LOS DATOS  (Data Preparation)
+==============================================================================
+Pregunta que responde: ¿COMO dejo los datos listos para el modelo?
+Codigo: funcion phase3_preparation() de train.py.
+
+Pasos:
+  1. Leer CSV y separar etiqueta (y) de pixeles (X).
+  2. Reestructurar (N,784) -> (N,28,28,1). La CNN necesita alto x ancho x canal.
+  3. Corregir orientacion: transponer cada imagen (transpose 0,2,1).
+  4. Normalizar: dividir entre 255 -> [0,1]. Acelera y estabiliza el
+     entrenamiento con descenso de gradiente.
+  5. Particion: 10 % del train como VALIDACION, estratificada (mantiene la
+     proporcion de clases) y con semilla fija (42) para reproducibilidad.
+        train = 101 520 | validacion = 11 280 | test = 18 800
+     El test NO se toca hasta la fase 5 (evita "fuga de datos").
+  6. Aumento de datos (dentro del modelo, solo se activa en entrenamiento):
+     rotacion +-6 %, traslacion 8 %, zoom 8 %. Hace al modelo robusto a
+     trazos reales distintos a los del dataset y reduce el sobreajuste.
+  - No hubo que limpiar nulos ni outliers (el dataset ya esta curado) ni
+    balancear clases (ya estan balanceadas).
+
+Para la app (despliegue) se replico la preparacion con la funcion preprocess()
+de app.py: escala de grises, invertir si el fondo es claro, recortar al
+caracter, redimensionar a ~20 px, centrar en 28x28 y suavizar levemente. Esto
+es crucial: la entrada del usuario debe "parecerse" a los datos de entrenamiento.
+
+Para estudiar: ¿por que estratificar? ¿por que separar validacion de test?
+  Validacion sirve para ajustar (callbacks); test solo para la nota final.
+
+
+==============================================================================
+FASE 4. MODELADO  (Modeling)
+==============================================================================
+Pregunta que responde: ¿QUE modelo aprende mejor este problema?
+Codigo: build_baseline(), build_cnn(), fit(), phase4_modeling() en train.py.
+
+A) BASELINE (modelo de referencia): MLP Flatten -> Dense(256, relu) ->
+   Dense(47, softmax). 6 epocas, 15 s. Ignora la estructura espacial.
+   Sirve para demostrar que la CNN aporta valor.
+
+B) CNN FINAL (332 879 parametros):
+     Entrada 28x28x1
+     -> Aumento de datos (rotacion, traslacion, zoom)
+     -> 3 bloques [Conv3x3 + BatchNorm + ReLU] x2 -> MaxPool -> Dropout
+        con 32, 64 y 128 filtros (dropout 0.20, 0.25, 0.30)
+     -> GlobalAveragePooling
+     -> Dense(256, relu) -> Dropout 0.40
+     -> Dense(47, softmax)
+
+  Por que cada pieza:
+     Convolucion      : detecta bordes, curvas, esquinas; comparte pesos.
+     BatchNorm        : estabiliza y acelera el entrenamiento.
+     MaxPool          : reduce tamano y da tolerancia a pequenos desplazamientos.
+     Dropout          : apaga neuronas al azar -> menos sobreajuste.
+     GlobalAvgPool    : menos parametros que Flatten.
+     Softmax + sparse_categorical_crossentropy : clasificacion de 47 clases con
+                        etiquetas enteras.
+
+  Entrenamiento: Adam lr=1e-3, batch 128, hasta 15 epocas.
+     ReduceLROnPlateau : reduce el lr a la mitad si val_loss se estanca.
+     EarlyStopping     : detiene y restaura los mejores pesos (patience 5).
+     Duracion: ~27 min en CPU (TensorFlow en Windows no usa GPU).
+
+  Curvas (05_curvas_entrenamiento.png): exactitud train ~88 %, val ~89 %.
+  Train y validacion van juntas -> NO hay sobreajuste, gracias a Dropout,
+  aumento de datos y BatchNorm.
+
+Para estudiar: ¿por que una CNN supera al MLP en imagenes?
+  Aprovecha la vecindad espacial de los pixeles y reutiliza filtros.
+
+
+==============================================================================
+FASE 5. EVALUACION  (Evaluation)
+==============================================================================
+Pregunta que responde: ¿EL MODELO CUMPLE los objetivos de la fase 1?
+Codigo: phase5_evaluation() de train.py. Resultados en reports/metrics.json.
+
+Resultados sobre el TEST (18 800 imagenes nunca vistas):
+  Azar (1/47) ............ 2.13 %
+  Baseline MLP ........... 83.05 %
+  CNN exactitud .......... 88.88 %   (validacion: 89.02 %)
+  CNN top-3 .............. 99.15 %
+  CNN F1 macro ........... 0.886
+
+Contraste con criterios de la fase 1:
+  Exactitud >= 88 %      -> 88.88 %  CUMPLE (por poco)
+  CNN > baseline         -> +5.8 puntos  CUMPLE
+  Top-3 >= 97 %          -> 99.15 %  CUMPLE
+  App publica            -> ver fase 6
+
+Analisis de errores (06_matriz_confusion, 07_f1_por_clase, 08_errores):
+  Confusiones mas frecuentes (veces): O->0 (209), F->f (195), L->1 (182),
+  I->1 (159), q->9 (113), f->F (65), 1->L (60), q->g (56), g->9 (48), 5->S (37).
+  Peores F1: L 0.54, O 0.56, 1 0.59, F 0.59, I 0.60, q 0.61.
+  Conclusion: los errores son pares visualmente casi identicos, incluso para un
+  humano; la CNN no falla al azar. Es un limite del dato (por eso el techo en
+  la literatura ronda 90 %).
+
+Limitaciones y mejoras posibles (el "ciclo" de CRISP-DM):
+  - Usar la variante byclass/letters o mas datos para separar O/0, I/1.
+  - Arquitecturas mas profundas (ResNet), ensamble, mas epocas / GPU.
+  - Metrica de "contexto": reconocer palabras permite resolver O/0 por contexto.
+
+Para estudiar: ¿por que no basta con "accuracy"? Por eso se miran F1 por clase,
+  matriz de confusion y top-3: muestran DONDE falla y no solo cuanto.
+
+
+==============================================================================
+FASE 6. DESPLIEGUE  (Deployment)
+==============================================================================
+Pregunta que responde: ¿COMO lo usa la gente real?
+Codigo: phase6_export() de train.py + app.py.
+
+Artefactos: model/emnist_cnn.keras (4.1 MB), labels.json (indice -> caracter),
+samples.npz (300 imagenes de test para la demo).
+
+App Streamlit (app.py), con 6 pestanas (una por fase) y en la 6 la demo:
+  - Entrada: muestras del test, subir imagen o usar la camara.
+  - Salida: caracter predicho, confianza y top-5 de probabilidades.
+  - st.cache_resource carga el modelo una sola vez (rapido).
+
+Probar en local:
+    pip install -r requirements.txt
+    streamlit run app.py
+
+Publicar en Streamlit Community Cloud (gratis):
+    1. Crear repositorio en GitHub y subir: app.py, train.py, requirements.txt,
+       model/, reports/, .gitignore, este TXT. (NO subir archive/: son ~3 GB).
+    2. Entrar a share.streamlit.io con la cuenta de GitHub.
+    3. New app -> elegir repo, rama main, archivo principal app.py -> Deploy.
+    4. Se obtiene una URL publica tipo https://<usuario>-<repo>.streamlit.app
+
+  Nota: GitHub Pages solo sirve paginas estaticas y no ejecuta Python/TensorFlow,
+  por eso se eligio Streamlit.
+
+Mantenimiento recomendado (cierra el ciclo): registrar predicciones de baja
+confianza, reentrenar con escritura real de usuarios y vigilar la caida de
+exactitud (data drift).
+
+
+==============================================================================
+RESUMEN EN UNA TABLA
+==============================================================================
+ Fase | Pregunta                | Resultado concreto
+ -----+-------------------------+---------------------------------------------
+  1   | ¿Que problema/meta?     | Clasificar 47 caracteres; meta >= 88 %
+  2   | ¿Que datos hay?         | 112 800 train, balanceado, transpuesto
+  3   | ¿Como preparar?         | transponer, /255, split 90/10, augmentation
+  4   | ¿Que modelo?            | CNN 3 bloques (333 k param) vs MLP baseline
+  5   | ¿Cumple?                | 88.88 % test, top-3 99.15 %, baseline 83.05 %
+  6   | ¿Como se usa?           | App Streamlit + modelo .keras
+
+ Reproducir todo:   python train.py   (≈ 30 min)   y luego   streamlit run app.py
+==============================================================================

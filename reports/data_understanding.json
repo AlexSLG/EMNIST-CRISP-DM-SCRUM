@@ -1,0 +1,16 @@
+{
+  "train_muestras": 112800,
+  "test_muestras": 18800,
+  "pixeles_por_imagen": 784,
+  "clases": 47,
+  "valores_nulos": 0,
+  "pixel_min": 0,
+  "pixel_max": 255,
+  "pixel_media": 44.652,
+  "pixel_std": 84.975,
+  "porcentaje_pixeles_cero": 66.66,
+  "duplicados_exactos_en_muestra_20k": 0,
+  "muestras_por_clase_min": 2400,
+  "muestras_por_clase_max": 2400,
+  "balanceado": true
+}
