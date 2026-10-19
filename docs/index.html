@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agente CNN · Reconocedor de dígitos</title>
+<style>
+  :root{--bg:#0f1420;--card:#171e2e;--ink:#e8ecf5;--mute:#8d98b3;--acc:#5eead4;--acc2:#818cf8;--line:#26304a}
+  @media (prefers-color-scheme: light){:root{--bg:#f3f5fa;--card:#fff;--ink:#1a2033;--mute:#5d6786;--acc:#0d9488;--acc2:#4f46e5;--line:#dde3f0}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,Segoe UI,sans-serif}
+  main{max-width:960px;margin:0 auto;padding:24px 16px 48px}
+  h1{margin:0 0 4px;font-size:1.7rem}
+  .sub{color:var(--mute);margin:0 0 20px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:720px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+  h2{font-size:1rem;margin:0 0 10px;color:var(--acc)}
+  canvas#pad{width:100%;max-width:280px;aspect-ratio:1;background:#000;border-radius:10px;touch-action:none;cursor:crosshair;display:block}
+  .row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  button,label.btn{background:var(--line);color:var(--ink);border:0;border-radius:8px;padding:8px 12px;cursor:pointer;font:inherit;font-size:.9rem}
+  button.p{background:var(--acc2);color:#fff}
+  button:hover,label.btn:hover{filter:brightness(1.15)}
+  .big{font-size:5rem;font-weight:800;line-height:1;color:var(--acc);margin:0}
+  .conf{color:var(--mute);margin:0 0 10px}
+  .bar{display:flex;align-items:center;gap:8px;font-size:.85rem;margin:3px 0}
+  .bar span:first-child{width:14px;text-align:right}
+  .bar i{display:block;height:10px;border-radius:5px;background:var(--acc2);min-width:2px;transition:width .25s}
+  .bar.top i{background:var(--acc)}
+  .bar em{font-style:normal;color:var(--mute);width:48px}
+  .maps{display:flex;flex-wrap:wrap;gap:4px}
+  .maps canvas{width:44px;height:44px;image-rendering:pixelated;border-radius:4px;background:#000}
+  #in28{width:84px;height:84px;image-rendering:pixelated;border-radius:6px;background:#000}
+  .samples{display:flex;flex-wrap:wrap;gap:6px}
+  .samples canvas{width:48px;height:48px;image-rendering:pixelated;border-radius:6px;cursor:pointer;border:2px solid transparent}
+  .samples canvas:hover{border-color:var(--acc)}
+  .arch{font-family:ui-monospace,Consolas,monospace;font-size:.82rem;color:var(--mute);margin:0}
+  table{border-collapse:collapse;width:100%;font-size:.85rem}
+  td,th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}
+  .gracias{text-align:center;margin-top:28px;padding:28px 16px;border-radius:14px;background:linear-gradient(135deg,var(--acc2),var(--acc));color:#fff}
+  .gracias h2{color:#fff;font-size:2rem;margin:0}
+  .gracias p{margin:4px 0 0;opacity:.95}
+  #err{color:#f87171}
+</style>
+</head>
+<body>
+<main>
+  <h1>🤖 Agente CNN · Reconocedor de dígitos</h1>
+  <p class="sub">Red neuronal convolucional con <b>MaxPooling</b> entrenada en Keras con MNIST. Dibuja o sube un número y el agente lo analiza en tu navegador. <span id="acc"></span></p>
+  <p id="err"></p>
+
+  <div class="grid">
+    <section class="card">
+      <h2>1 · Ingresa una imagen</h2>
+      <canvas id="pad" width="280" height="280"></canvas>
+      <div class="row">
+        <button class="p" id="go">Reconocer</button>
+        <button id="clr">Borrar</button>
+        <label class="btn">Subir imagen<input id="file" type="file" accept="image/*" hidden></label>
+      </div>
+      <p class="sub" style="margin:10px 0 6px;font-size:.85rem">O prueba con dígitos reales del dataset:</p>
+      <div class="samples" id="samples"></div>
+    </section>
+
+    <section class="card">
+      <h2>2 · Predicción del agente</h2>
+      <p class="big" id="pred">–</p>
+      <p class="conf" id="conf">Esperando imagen…</p>
+      <div id="bars"></div>
+    </section>
+  </div>
+
+  <div class="grid" style="margin-top:16px">
+    <section class="card">
+      <h2>3 · Lo que ve la red</h2>
+      <p class="sub" style="margin:0 0 6px;font-size:.85rem">Entrada normalizada 28×28:</p>
+      <canvas id="in28" width="28" height="28"></canvas>
+      <p class="sub" style="margin:10px 0 6px;font-size:.85rem">Mapas de activación tras Conv1 + MaxPooling:</p>
+      <div class="maps" id="maps"></div>
+    </section>
+    <section class="card">
+      <h2>Arquitectura</h2>
+      <pre class="arch">Entrada 28×28×1
+Conv2D 3×3 + ReLU
+MaxPooling2D 2×2
+Conv2D 3×3 + ReLU
+MaxPooling2D 2×2
+Flatten → Dropout
+Dense 10 + Softmax</pre>
+      <h2 style="margin-top:14px">Bitácora del agente</h2>
+      <table id="log"></table>
+    </section>
+  </div>
+
+  <div class="gracias">
+    <h2>¡Gracias!</h2>
+    <p>Gracias por probar el agente de reconocimiento de dígitos 🙌</p>
+  </div>
+</main>
+
+<script>
+let M = null;
+
+// ---------- Capas (inferencia CNN en JS puro, mismos pesos de Keras) ----------
+function conv(x, H, W, C, k, F, w, b) { // x HWC, kernel [3][3][C][F] aplanado, valid, relu
+  const oh = H - 2, ow = W - 2, out = new Float32Array(oh * ow * F);
+  for (let i = 0; i < oh; i++) for (let j = 0; j < ow; j++) for (let f = 0; f < F; f++) {
+    let s = b[f];
+    for (let a = 0; a < 3; a++) for (let c = 0; c < 3; c++) for (let d = 0; d < C; d++)
+      s += x[((i + a) * W + (j + c)) * C + d] * w[((a * 3 + c) * C + d) * F + f];
+    out[(i * ow + j) * F + f] = s > 0 ? s : 0;
+  }
+  return { d: out, H: oh, W: ow, C: F };
+}
+function maxpool(t) {
+  const oh = t.H >> 1, ow = t.W >> 1, out = new Float32Array(oh * ow * t.C);
+  for (let i = 0; i < oh; i++) for (let j = 0; j < ow; j++) for (let c = 0; c < t.C; c++) {
+    let m = -Infinity;
+    for (let a = 0; a < 2; a++) for (let e = 0; e < 2; e++)
+      m = Math.max(m, t.d[((2 * i + a) * t.W + 2 * j + e) * t.C + c]);
+    out[(i * ow + j) * t.C + c] = m;
+  }
+  return { d: out, H: oh, W: ow, C: t.C };
+}
+function flat3(w) { return w.flat(3); }
+function predict(px) { // px: Float32Array 784 en [0,1]
+  const [c1, c2] = M.filtros, [w0, b0, w1, b1, w2, b2] = M.pesos;
+  const W0 = flat3(w0), W1 = flat3(w1);
+  const a1 = conv(px, 28, 28, 1, 3, c1, W0, b0), p1 = maxpool(a1);
+  const a2 = conv(p1.d, p1.H, p1.W, c1, 3, c2, W1, b1), p2 = maxpool(a2);
+  const z = new Float32Array(10);
+  for (let o = 0; o < 10; o++) {
+    let s = b2[o];
+    for (let i = 0; i < p2.d.length; i++) s += p2.d[i] * w2[i][o];
+    z[o] = s;
+  }
+  const mx = Math.max(...z), e = Array.from(z, v => Math.exp(v - mx)), sum = e.reduce((a, b) => a + b);
+  return { probs: e.map(v => v / sum), p1 };
+}
+
+// ---------- Preprocesado estilo MNIST ----------
+function preprocess(src) { // src: canvas con dígito claro sobre fondo oscuro
+  const s = src.width, ctx = src.getContext("2d"), data = ctx.getImageData(0, 0, s, src.height).data;
+  const g = new Float32Array(s * src.height);
+  for (let i = 0; i < g.length; i++) g[i] = (data[i * 4] * .299 + data[i * 4 + 1] * .587 + data[i * 4 + 2] * .114) / 255;
+  let x0 = s, x1 = -1, y0 = src.height, y1 = -1;
+  for (let y = 0; y < src.height; y++) for (let x = 0; x < s; x++) if (g[y * s + x] > .2) {
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+  }
+  if (x1 < 0) return null;
+  const bw = x1 - x0 + 1, bh = y1 - y0 + 1, sc = 20 / Math.max(bw, bh);
+  const t = document.createElement("canvas"); t.width = t.height = 28;
+  const tc = t.getContext("2d"); tc.fillStyle = "#000"; tc.fillRect(0, 0, 28, 28);
+  tc.imageSmoothingQuality = "high";
+  tc.drawImage(src, x0, y0, bw, bh, (28 - bw * sc) / 2, (28 - bh * sc) / 2, bw * sc, bh * sc);
+  let d = tc.getImageData(0, 0, 28, 28).data, m = 0, cx = 0, cy = 0;
+  for (let i = 0; i < 784; i++) { const v = d[i * 4]; m += v; cx += v * (i % 28); cy += v * Math.floor(i / 28); }
+  const dx = Math.round(14 - cx / m), dy = Math.round(14 - cy / m);
+  const t2 = document.createElement("canvas"); t2.width = t2.height = 28;
+  const c2 = t2.getContext("2d"); c2.fillStyle = "#000"; c2.fillRect(0, 0, 28, 28); c2.drawImage(t, dx, dy);
+  d = c2.getImageData(0, 0, 28, 28).data;
+  return Float32Array.from({ length: 784 }, (_, i) => d[i * 4] / 255);
+}
+
+// ---------- UI ----------
+const $ = id => document.getElementById(id);
+const pad = $("pad"), pc = pad.getContext("2d");
+function clear() { pc.fillStyle = "#000"; pc.fillRect(0, 0, 280, 280); }
+clear();
+let drawing = false;
+function pos(e) { const r = pad.getBoundingClientRect(); return [(e.clientX - r.left) * 280 / r.width, (e.clientY - r.top) * 280 / r.height]; }
+pad.addEventListener("pointerdown", e => { drawing = true; pad.setPointerCapture(e.pointerId); const [x, y] = pos(e); pc.beginPath(); pc.moveTo(x, y); dot(x, y); });
+pad.addEventListener("pointermove", e => { if (!drawing) return; const [x, y] = pos(e); pc.lineTo(x, y); pc.stroke(); dot(x, y); });
+pad.addEventListener("pointerup", () => { drawing = false; run(); });
+function dot(x, y) { pc.fillStyle = pc.strokeStyle = "#fff"; pc.lineWidth = 20; pc.lineCap = pc.lineJoin = "round"; pc.beginPath(); pc.arc(x, y, 10, 0, 7); pc.fill(); pc.beginPath(); pc.moveTo(x, y); }
+$("clr").onclick = () => { clear(); $("pred").textContent = "–"; $("conf").textContent = "Esperando imagen…"; $("bars").innerHTML = ""; $("maps").innerHTML = ""; $("in28").getContext("2d").clearRect(0, 0, 28, 28); };
+$("go").onclick = run;
+
+$("file").onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const img = new Image();
+  img.onload = () => {
+    const t = document.createElement("canvas"); const s = 280;
+    t.width = t.height = s; const c = t.getContext("2d");
+    c.fillStyle = "#fff"; c.fillRect(0, 0, s, s);
+    const k = Math.min(s / img.width, s / img.height);
+    c.drawImage(img, (s - img.width * k) / 2, (s - img.height * k) / 2, img.width * k, img.height * k);
+    const d = c.getImageData(0, 0, s, s).data; let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += d[i];
+    const invert = sum / (d.length / 4) > 110; // fondo claro -> invertir
+    const o = c.getImageData(0, 0, s, s), od = o.data;
+    for (let i = 0; i < od.length; i += 4) {
+      let v = od[i] * .299 + od[i + 1] * .587 + od[i + 2] * .114;
+      if (invert) v = 255 - v;
+      od[i] = od[i + 1] = od[i + 2] = v;
+    }
+    pc.putImageData(o, 0, 0); URL.revokeObjectURL(img.src); run();
+  };
+  img.src = URL.createObjectURL(f); e.target.value = "";
+};
+
+function run() {
+  if (!M) return;
+  const px = preprocess(pad);
+  if (!px) return;
+  const c = $("in28").getContext("2d"), im = c.createImageData(28, 28);
+  px.forEach((v, i) => { im.data[i * 4] = im.data[i * 4 + 1] = im.data[i * 4 + 2] = v * 255; im.data[i * 4 + 3] = 255; });
+  c.putImageData(im, 0, 0);
+  const { probs, p1 } = predict(px);
+  const best = probs.indexOf(Math.max(...probs));
+  $("pred").textContent = best;
+  $("conf").textContent = `Confianza: ${(probs[best] * 100).toFixed(1)}%`;
+  $("bars").innerHTML = probs.map((p, i) =>
+    `<div class="bar ${i === best ? "top" : ""}"><span>${i}</span><div style="flex:1"><i style="width:${p * 100}%"></i></div><em>${(p * 100).toFixed(1)}%</em></div>`).join("");
+  const maps = $("maps"); maps.innerHTML = "";
+  for (let f = 0; f < p1.C; f++) {
+    const cv = document.createElement("canvas"); cv.width = p1.W; cv.height = p1.H;
+    const cc = cv.getContext("2d"), id = cc.createImageData(p1.W, p1.H); let mx = 1e-6;
+    for (let i = 0; i < p1.H * p1.W; i++) mx = Math.max(mx, p1.d[i * p1.C + f]);
+    for (let i = 0; i < p1.H * p1.W; i++) { const v = p1.d[i * p1.C + f] / mx * 255; id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 255; }
+    cc.putImageData(id, 0, 0); maps.appendChild(cv);
+  }
+}
+
+// ---------- Carga del modelo ----------
+Promise.all([fetch("pesos.json").then(r => r.json()), fetch("muestras.json").then(r => r.json())]).then(([m, mu]) => {
+  M = m;
+  $("acc").textContent = `Precisión en test: ${(m.test_acc * 100).toFixed(2)}%`;
+  $("log").innerHTML = "<tr><th>#</th><th>Filtros</th><th>Épocas</th><th>Test</th></tr>" +
+    m.bitacora.map(b => `<tr><td>${b.intento}</td><td>${b.c1}/${b.c2}</td><td>${b.epochs}</td><td>${(b.test_acc * 100).toFixed(2)}%</td></tr>`).join("");
+  mu.forEach(s => {
+    const cv = document.createElement("canvas"); cv.width = cv.height = 28; cv.title = "Dígito " + s.label;
+    const c = cv.getContext("2d"), id = c.createImageData(28, 28);
+    s.px.forEach((v, i) => { id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 255; });
+    c.putImageData(id, 0, 0);
+    cv.onclick = () => { clear(); pc.imageSmoothingEnabled = false; pc.drawImage(cv, 40, 40, 200, 200); run(); };
+    $("samples").appendChild(cv);
+  });
+}).catch(e => { $("err").textContent = "No se pudo cargar el modelo (abre con un servidor http, no file://): " + e; });
+</script>
+</body>
+</html>
